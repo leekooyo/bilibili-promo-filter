@@ -1,0 +1,8 @@
+/local/
+/snapshots/
+/feedback/
+*.html
+*.har
+.env
+.env.*
+node_modules/
