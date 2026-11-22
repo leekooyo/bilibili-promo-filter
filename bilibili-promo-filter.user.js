@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站动态软广折叠
 // @namespace    local.bilibili.dynamic.promo
-// @version      2.2.3
+// @version      2.2.4
 // @updateURL    https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @downloadURL  https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @description  隐藏动态广告位和带货商品卡，并在本地按组合信号折叠疑似软广
@@ -21,6 +21,7 @@
     const cardSelector = '.bili-dyn-list__item';
     const listSelector = '.bili-dyn-list__items';
     const goodsSelector = '.bili-dyn-card-goods';
+    const platformAdSelector = '.bili-dyn-ads';
     const footerSelector = '.bili-dyn-item__footer';
     const forwardTextSelector = '.bili-dyn-content__forw__desc';
     const videoReferenceSelector = '.bili-dyn-content__orig.reference :is(.suit-video-card, .bili-dyn-card-video)';
@@ -28,6 +29,7 @@
     const noticeSelector = '[data-bili-promo-notice]';
     const groupSelector = '[data-bili-promo-group]';
     const states = new WeakMap();
+    const hiddenAdCards = new WeakSet();
     const lists = new Map();
     const pending = new Set();
     const dirtyLists = new Set();
@@ -228,7 +230,7 @@
 
 
     GM_addStyle(
-        '.bili-dyn-ads, ' + cardSelector + ':has(' + goodsSelector + ') { display: none !important; }' +
+        platformAdSelector + ', ' + cardSelector + ':has(' + goodsSelector + ') { display: none !important; }' +
         cardSelector + '[data-bili-promo-state="collapsed"] { display:none !important; }' +
         groupSelector + ' { margin-block-end:4px; }' +
         groupSelector + ' button { display:block; width:100%; text-align:start; padding:3px 10px;' +
@@ -304,14 +306,18 @@
 
     function refresh(card, feedbackChanged = false) {
         let state = states.get(card);
-        if (!card.isConnected || card.querySelector(goodsSelector)) {
+        const hidden = card.matches(platformAdSelector) || Boolean(card.querySelector(goodsSelector));
+        const visibilityChanged = hidden !== hiddenAdCards.has(card);
+        if (hidden) hiddenAdCards.add(card);
+        else hiddenAdCards.delete(card);
+        if (!card.isConnected || hidden) {
             if (state) clear(card, state);
-            return state?.result.level === 2;
+            return visibilityChanged || state?.result.level === 2;
         }
         const blocks = contentBlocks(card);
         if (!blocks.length) {
             if (state) clear(card, state);
-            return state?.result.level === 2;
+            return visibilityChanged || state?.result.level === 2;
         }
         const sameText = state && blocks.length === state.blocks.length &&
             blocks.every((block, index) => block.text === state.blocks[index].text &&
@@ -358,7 +364,7 @@
         state.result = personalize(baseline, state.text, key);
         if (state.result.level !== 2) state.expanded = false;
         draw(card, state);
-        return wasHigh !== (state.result.level === 2);
+        return visibilityChanged || wasHigh !== (state.result.level === 2);
     }
 
     function drawGroup(group) {
@@ -400,7 +406,7 @@
             run = [];
         }
         for (const child of [...list.children]) {
-            if (child.matches(groupSelector)) continue;
+            if (child.matches(groupSelector + ', ' + platformAdSelector) || hiddenAdCards.has(child)) continue;
             if (states.get(child)?.result.level === 2) run.push(child);
             else finishRun();
         }
