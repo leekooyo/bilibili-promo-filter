@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站动态软广折叠
 // @namespace    local.bilibili.dynamic.promo
-// @version      2.1.1
+// @version      2.2.0
 // @updateURL    https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @downloadURL  https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @description  隐藏动态广告位和带货商品卡，并在本地按组合信号折叠疑似软广
@@ -19,11 +19,15 @@
     'use strict';
 
     const cardSelector = '.bili-dyn-list__item';
+    const listSelector = '.bili-dyn-list__items';
     const goodsSelector = '.bili-dyn-card-goods';
     const contentSelector = '.dyn-card-opus, .bili-dyn-card-article, .bili-dyn-content__orig__desc, .opus-module-content';
     const noticeSelector = '[data-bili-promo-notice]';
+    const groupSelector = '[data-bili-promo-group]';
     const states = new WeakMap();
+    const lists = new Map();
     const pending = new Set();
+    const dirtyLists = new Set();
     let frame = 0;
 
     // Each category contributes at most once per content block.
@@ -37,6 +41,8 @@
         live: /(?:点进|进入|进|去)\s*直播间|直播间(?:专享|专属)(?:价|折扣|优惠)/,
         scarcity: /最后\s*\d+\s*(?:小时|单|份|件)|(?:仅剩|只剩|限量)\s*\d+\s*(?:单|份|件)|(?:补贴|优惠券?|红包).{0,8}(?:抢完就没|抢完即止|只剩)|(?:库存(?:不多|告急|.{0,5}掉得快)|(?:马上|即将|快要)\s*(?:断码|断货|售罄)|(?:尺码|库存|余货)\s*(?:已经|目前)?\s*(?:所剩无几|不多(?:了)?)|晚了就没|限时(?:抢购|秒杀|特价|优惠)|现货(?:速发|秒发)|售完即止)/,
         promotion: /特价|清仓|史低|大[漏陋]|降价|零头价|专享(?:价|折扣|优惠)|补贴|神券|无门槛|(?:奥莱|奥特莱斯).{0,10}降了|bug价/i,
+        limitedOffer: /(?:只余|仅余|剩余|还剩|只剩|仅剩)\s*(?:最后)?\s*\d+\s*(?:个|份|件|单)?\s*(?:优惠名额|补贴名额|优惠券|券名额)|(?:优惠|补贴|领券)名额.{0,8}(?:发完即止|抢完就没|仅剩|只剩)/,
+        urgency: /手慢(?:就没|无)|发完即止|抢完即止|抢完就没|晚了就没|抓紧(?:领取|下单|抢)|限时(?:领取|抢购)/,
         giveaway: /评论区\s*(?:随机)?抽.{0,12}(?:粉丝|名|位).{0,10}补贴\s*(?:¥|💰)?\s*\d/,
         repeatedPrice: /(\d+\s*(?:盒|包|瓶|罐|袋|件|套)\s*到手(?:价)?\s*\d+(?:\.\d+)?)[!、，,\s]+\1(?![\d.])/,
         sellerPrice: /(?:原价|专柜(?:价)?|门店(?:价)?|别家|其他平台|某[\u4e00-\u9fff]{1,4})\s*(?:售价|卖|要)?\s*(?:¥|💰)?\s*\d+(?:\.\d+)?\s*(?:多|元|块)?\s*[,;、]\s*(?:咱们|我们|本店|店里)(?:这边)?\s*(?:仅(?:需|售)?|只要|到手(?:价)?|特价)\s*(?:¥|💰)?\s*\d+(?:\.\d+)?\s*(?:元|块)/,
@@ -67,6 +73,7 @@
         const rebateDeal = hit.rebate && (hit.live || hit.scarcity);
         const repeated = hit.repeatedPrice && hit.giveaway;
         const stockDeal = hit.giveaway && hit.scarcity && hit.checkout;
+        const limitedDeal = hit.limitedOffer && hit.urgency;
         add(offer, 2, '报价');
         add(directing, hit.copy || search ? 4 : 2, '购买或领取指令');
         add(hit.rebate, 2, '收货返现');
@@ -76,10 +83,12 @@
         add(hit.giveaway, 1, '评论区抽补贴');
         add(hit.repeatedPrice, 3, '重复报价');
         add(seller, 4, '卖家报价与售卖条件');
+        add(limitedDeal, 4, '优惠名额与催促');
 
-        const actionable = directing || rebateDeal || repeated || stockDeal || seller;
+        const actionable = directing || rebateDeal || repeated || stockDeal || seller || limitedDeal;
         const high = score >= 6 && offer && actionable && !hit.discussion;
-        return { level: high ? 2 : score >= 4 ? 1 : 0, score, reasons };
+        const commercial = offer && (directing || hit.rebate || (hit.scarcity && hit.promotion));
+        return { level: high ? 2 : score >= 4 ? 1 : 0, score, reasons, commercial };
     }
 
     const storageKey = 'bili-promo-feedback-v1';
@@ -175,7 +184,8 @@
             return { ...baseline, level: 1, reasons: [...baseline.reasons, '类似你保留的内容'] };
         }
         if (baseline.level === 2 || signals.discussion.test(text) || first <= negative + 0.12) return baseline;
-        if (second >= 0.40 && first >= 0.50) {
+        if ((second >= 0.40 && first >= 0.50) ||
+            (baseline.level === 1 && baseline.commercial && second >= 0.37 && first >= 0.48)) {
             return { level: 2, score: baseline.score, reasons: [...baseline.reasons, '类似你标记的广告'] };
         }
         if (baseline.level === 0 && first >= 0.42) {
@@ -202,27 +212,36 @@
 
     GM_addStyle(
         '.bili-dyn-ads, ' + cardSelector + ':has(' + goodsSelector + ') { display: none !important; }' +
-        cardSelector + '[data-bili-promo-state="collapsed"] > :not(' + noticeSelector + ') { display: none !important; }' +
-        cardSelector + ' > ' + noticeSelector + ' {' +
-        'box-sizing:border-box; display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px;' +
-        'padding:8px 12px; border-radius:8px; font-size:13px; line-height:1.5;' +
-        'color:var(--text2,#61666d); background:var(--bg2,#f1f2f3);' +
-        '}' +
-        noticeSelector + '[data-bili-promo-neutral] { background:transparent; padding:2px 12px; justify-content:flex-end; font-size:12px; }' +
-        noticeSelector + ' summary { cursor:pointer; }' +
-        noticeSelector + ' details > div { display:flex; flex-wrap:wrap; gap:4px; padding-top:4px; }' +
-        noticeSelector + ' button {' +
+        cardSelector + '[data-bili-promo-state="collapsed"] { display:none !important; }' +
+        groupSelector + ' { margin-block-end:4px; }' +
+        groupSelector + ' button { display:block; width:100%; text-align:start; padding:3px 10px;' +
+        'font-size:12px; line-height:1.5; border:0; border-radius:6px; cursor:pointer;' +
+        'color:var(--text2,#61666d); background:var(--bg2,#f1f2f3); }' +
+        '.bili-dyn-item__header:has(> ' + noticeSelector + '), ' + cardSelector + ':has(> ' + noticeSelector + ') { position:relative; }' +
+        noticeSelector + ' { position:absolute; inset-inline-end:32px; inset-block-end:0; z-index:1;' +
+        'font-size:12px; line-height:1.5; color:var(--text2,#61666d); }' +
+        cardSelector + ' > ' + noticeSelector + ' { inset-block-start:4px; inset-block-end:auto; }' +
+        noticeSelector + ' summary { cursor:pointer; color:inherit; border-radius:4px; padding:0 4px; background:var(--bg1,#fff); }' +
+        noticeSelector + ' details > div { position:absolute; inset-inline-end:0; min-width:190px; width:max-content; max-width:240px;' +
+        'padding:8px; border:1px solid var(--line_regular,#c9ccd0); border-radius:6px; background:var(--bg1,#fff); }' +
+        noticeSelector + ' button:not([hidden]) { margin:3px 3px 0 0;' +
         'cursor:pointer; color:var(--text-link,#087f9f); background:var(--bg1,#fff);' +
         'border:1px solid var(--line_regular,#c9ccd0); border-radius:6px; padding:3px 9px;' +
         '}'
     );
 
-    function strongest(card) {
-        let best = { level: 0, score: 0, reasons: [], text: "" };
+    function contentBlocks(card) {
+        const blocks = [];
         for (const element of card.querySelectorAll(contentSelector)) {
-            // A parent article already covers its own nested summary.
             if (element.closest(cardSelector) !== card || element.parentElement.closest(contentSelector)) continue;
-            const text = element.textContent.normalize('NFKC').replace(/[\u200b-\u200f\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+            blocks.push(element.textContent.normalize('NFKC').replace(/[\u200b-\u200f\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim());
+        }
+        return blocks;
+    }
+
+    function strongest(blocks) {
+        let best = { level: 0, score: 0, reasons: [], text: "" };
+        for (const text of blocks) {
             const result = classify(text);
             if (result.level > best.level || (result.level === best.level && result.score > best.score) || (result.score === best.score && result.level === best.level && text.length > best.text.length)) {
                 best = { ...result, text };
@@ -254,108 +273,201 @@
         const mode = high ? (state.expanded ? 'expanded' : 'collapsed') : 'suspected';
         if (active) card.setAttribute('data-bili-promo-state', mode);
         else card.removeAttribute('data-bili-promo-state');
-        const label = high && !state.expanded ? '已折叠疑似推广' : '疑似推广';
-        const description = active ? label + ' · ' + state.result.reasons.join('、') :
+        const description = active ? state.result.reasons.join('、') :
             state.feedback === false ? '已标记为普通动态' : '';
+        const summary = active ? '疑似推广' : '推广标记';
+        if (state.summary.textContent !== summary) state.summary.textContent = summary;
         if (state.label.textContent !== description) state.label.textContent = description;
         state.label.hidden = !description;
-        state.notice.toggleAttribute('data-bili-promo-neutral', !active);
-        state.toggle.hidden = !high;
         state.undo.hidden = state.feedback === undefined;
-        if (high) {
-            state.toggle.textContent = state.expanded ? '折叠动态' : '展开动态';
-            state.toggle.setAttribute('aria-expanded', String(state.expanded));
-        } else {
-            state.toggle.removeAttribute('aria-expanded');
-        }
-
-        if (card.firstElementChild !== state.notice) card.prepend(state.notice);
     }
 
-    function refresh(card) {
+    function refresh(card, feedbackChanged = false) {
         let state = states.get(card);
         if (!card.isConnected || card.querySelector(goodsSelector)) {
             if (state) clear(card, state);
-            return;
+            return state?.result.level === 2;
         }
-        const baseline = strongest(card);
-        if (!baseline.text) {
+        const blocks = contentBlocks(card);
+        if (!blocks.some(Boolean)) {
             if (state) clear(card, state);
-            return;
+            return state?.result.level === 2;
         }
+        const sameText = state && blocks.length === state.blocks.length &&
+            blocks.every((text, index) => text === state.blocks[index]);
+        const baseline = sameText ? state.baseline : strongest(blocks);
         const identity = card.querySelector('.dyn-card-opus__title[data-url], .bili-dyn-card-article[href]');
         const link = identity?.getAttribute('data-url') ?? identity?.getAttribute('href');
         const key = fingerprint(link ? 'post:' + link.replace(/^https?:/, '').split(/[?#]/)[0] : 'text:' + baseline.text);
         if (state && state.key !== key && link) state.expanded = false;
+        const wasHigh = state?.result.level === 2;
+        const mount = card.querySelector('.bili-dyn-item__header') ?? card;
+        if (sameText && state.key === key && !feedbackChanged) {
+            if (state.notice.parentElement !== mount) mount.append(state.notice);
+            return false;
+        }
         if (!state) {
             const notice = document.createElement('div');
             const label = document.createElement('span');
             const details = document.createElement('details');
             const summary = document.createElement('summary');
-            const buttons = document.createElement('div');
+            const panel = document.createElement('div');
             notice.setAttribute('data-bili-promo-notice', '');
             summary.textContent = '推广标记';
-            details.append(summary, buttons);
-            state = { notice, label, expanded: false };
-            state.toggle = makeButton('展开动态', () => {
-                state.expanded = !state.expanded;
-                draw(card, state);
-            });
+            details.append(summary, panel);
+            notice.append(details);
+            notice.addEventListener('click', event => event.stopPropagation());
+            state = { notice, label, summary, expanded: false };
             state.undo = makeButton('撤销标记', () => saveFeedback(state, null));
-            buttons.append(makeButton('这是广告', () => {
+            panel.append(label, document.createElement('br'), makeButton('这是广告', () => {
                 details.open = false;
-                state.expanded = false;
                 saveFeedback(state, true);
             }), makeButton('这不是广告', () => {
                 details.open = false;
                 saveFeedback(state, false);
             }), state.undo);
-            notice.append(label, state.toggle, details);
             states.set(card, state);
         }
+        if (state.notice.parentElement !== mount) mount.append(state.notice);
+        state.blocks = blocks;
+        state.baseline = baseline;
         state.key = key;
         state.text = baseline.text;
         state.feedback = samples.find(sample => sample.key === key)?.ad;
         state.result = personalize(baseline, state.text, key);
+        if (state.result.level !== 2) state.expanded = false;
         draw(card, state);
+        return wasHigh !== (state.result.level === 2);
     }
 
-    function refreshFeed() {
-        for (const card of document.querySelectorAll(cardSelector)) refresh(card);
+    function drawGroup(group) {
+        const label = group.cards.length + ' 条疑似推广';
+        const description = group.open ? '收起 ' + label : '已折叠 ' + label + ' · 展开';
+        if (group.button.textContent !== description) group.button.textContent = description;
+        group.button.setAttribute('aria-expanded', String(group.open));
+        for (const card of group.cards) {
+            const state = states.get(card);
+            if (state.expanded === group.open) continue;
+            state.expanded = group.open;
+            draw(card, state);
+        }
     }
 
+    function regroup(list) {
+        const info = lists.get(list);
+        const next = new Map();
+        let run = [];
+        function finishRun() {
+            if (!run.length) return;
+            const first = run[0];
+            let group = info.groups.get(first);
+            if (!group) {
+                const row = document.createElement('div');
+                row.setAttribute('data-bili-promo-group', '');
+                group = { row };
+                group.button = makeButton('', () => {
+                    group.open = !group.open;
+                    drawGroup(group);
+                });
+                row.append(group.button);
+            }
+            group.cards = run;
+            group.open = run.some(card => states.get(card).expanded);
+            if (first.previousElementSibling !== group.row) first.before(group.row);
+            next.set(first, group);
+            drawGroup(group);
+            run = [];
+        }
+        for (const child of [...list.children]) {
+            if (child.matches(groupSelector)) continue;
+            if (states.get(child)?.result.level === 2) run.push(child);
+            else finishRun();
+        }
+        finishRun();
+        for (const [first, group] of info.groups) if (!next.has(first)) group.row.remove();
+        info.groups = next;
+    }
 
     function flush() {
         frame = 0;
-        for (const card of pending) refresh(card);
-        pending.clear();
-    }
-
-    function enqueue(node) {
-        const element = node.nodeType === 1 ? node : node.parentElement;
-        if (!element || element.closest(noticeSelector)) return;
-        const card = element.closest(cardSelector);
-        if (card) pending.add(card);
-        for (const nested of element.querySelectorAll(cardSelector)) pending.add(nested);
-    }
-
-    const observer = new MutationObserver(records => {
-        for (const record of records) {
-            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-            if (!target || target.closest(noticeSelector)) continue;
-            const card = target.closest(cardSelector);
-            if (card) pending.add(card);
-            for (const node of record.addedNodes) enqueue(node);
+        for (const card of pending) {
+            const list = card.parentElement;
+            if (lists.has(list) && refresh(card)) dirtyLists.add(list);
         }
-        if (pending.size && !frame) frame = requestAnimationFrame(flush);
-    });
+        pending.clear();
+        for (const list of dirtyLists) if (lists.has(list)) regroup(list);
+        dirtyLists.clear();
+    }
 
-    refreshFeed();
+    function schedule() {
+        if (!frame && (pending.size || dirtyLists.size)) frame = requestAnimationFrame(flush);
+    }
+
+    function watch(list) {
+        if (lists.has(list)) return;
+        const observer = new MutationObserver(records => {
+            for (const record of records) {
+                const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+                if (!target || target.closest(noticeSelector + ', ' + groupSelector)) continue;
+                if (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].every(
+                    node => node.nodeType === 1 && node.matches(noticeSelector + ', ' + groupSelector))) continue;
+                if (target === list) {
+                    for (const node of [...record.addedNodes, ...record.removedNodes]) {
+                        if (node.nodeType !== 1 || node.matches(groupSelector)) continue;
+                        if (node.matches(cardSelector) && node.parentElement === list) pending.add(node);
+                        dirtyLists.add(list);
+                    }
+                } else {
+                    const card = target.closest(cardSelector);
+                    if (card?.parentElement === list) pending.add(card);
+                }
+            }
+            schedule();
+        });
+        lists.set(list, { observer, groups: new Map() });
+        for (const child of list.children) if (child.matches(cardSelector)) refresh(child);
+        regroup(list);
+        observer.observe(list, {
+            subtree: true, childList: true, characterData: true,
+            attributes: true, attributeFilter: ['data-url', 'href'],
+        });
+    }
+
+    function discover(root) {
+        if (root.matches(listSelector)) watch(root);
+        for (const list of root.querySelectorAll(listSelector)) watch(list);
+        if (root.matches(cardSelector) && root.parentElement) watch(root.parentElement);
+        for (const card of root.querySelectorAll(cardSelector)) watch(card.parentElement);
+    }
+
+    function refreshFeed() {
+        for (const list of lists.keys()) {
+            for (const card of list.children) if (card.matches(cardSelector)) refresh(card, true);
+            regroup(list);
+        }
+    }
+
+    discover(document.body);
+    const discovery = new MutationObserver(records => {
+        for (const [list, info] of lists) {
+            if (list.isConnected) continue;
+            info.observer.disconnect();
+            for (const group of info.groups.values()) group.row.remove();
+            lists.delete(list);
+        }
+        for (const record of records) {
+            if (record.target.closest?.(listSelector + ', ' + cardSelector + ', ' + noticeSelector + ', ' + groupSelector)) continue;
+            for (const node of record.addedNodes) {
+                if (node.nodeType === 1 && node.isConnected) discover(node);
+            }
+        }
+    });
+    discovery.observe(document.body, { subtree: true, childList: true });
+
     GM_addValueChangeListener(storageKey, (_key, _previous, value, remote) => {
         if (remote) {
             rebuild(value);
             refreshFeed();
         }
     });
-    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
 })();
