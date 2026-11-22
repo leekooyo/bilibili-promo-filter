@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站动态软广折叠
 // @namespace    local.bilibili.dynamic.promo
-// @version      2.2.2
+// @version      2.2.3
 // @updateURL    https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @downloadURL  https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @description  隐藏动态广告位和带货商品卡，并在本地按组合信号折叠疑似软广
@@ -22,7 +22,9 @@
     const listSelector = '.bili-dyn-list__items';
     const goodsSelector = '.bili-dyn-card-goods';
     const footerSelector = '.bili-dyn-item__footer';
-    const contentSelector = '.dyn-card-opus, .bili-dyn-card-article, .bili-dyn-content__orig__desc, .opus-module-content';
+    const forwardTextSelector = '.bili-dyn-content__forw__desc';
+    const videoReferenceSelector = '.bili-dyn-content__orig.reference :is(.suit-video-card, .bili-dyn-card-video)';
+    const contentSelector = '.dyn-card-opus, .bili-dyn-card-article, .bili-dyn-content__orig__desc, .opus-module-content, ' + forwardTextSelector;
     const noticeSelector = '[data-bili-promo-notice]';
     const groupSelector = '[data-bili-promo-group]';
     const states = new WeakMap();
@@ -35,7 +37,9 @@
     const signals = {
         price: /\d+(?:\.\d+)?\s*(?:元|块(?:钱)?)\s*(?:就能|就可|即可)?\s*(?:带走|拿下|入手|到手|包邮)|\d+(?:\.\d+)?\s*(?:元)?\s*无门槛|\d+(?:\.\d+)?\s*(?:元|块)?\s*一\s*(?:箱|盒|包|瓶|罐|袋)|(?:到手(?:价|才|仅)?|券后(?:价|才|仅(?:需|售)?)?|特价)\s*\d+(?:\.\d+)?(?=\s*(?:元|块|¥|💰|[啊呀啦了]?\s*(?:[!！?？,，。;；❗‼]|$)))|(?:只要|仅(?:需|售)?)\s*\d+(?:\.\d+)?\s*(?:元|块)|\d+(?:\.\d+)?\s*的价格|\d+(?:\.\d+)?\s*(?:元|块钱|左右)\s*到手|(?:¥|💰)\s*\d|(?:满|领)?\s*\d{1,3}\s*(?:[-−减])\s*\d{1,3}\s*(?:的券|神券|红包|元)|\d+\s*(?:盒|包|瓶|罐|袋|件|粒|套)\s*(?:才|只要|仅需|到手价?)\s*\d/,
         copy: /(?:copy|[复複腹]制)(?!\s*(?:这段|该|一段)?\s*(?:代码|脚本|命令|配置|函数|公式)).{0,36}(?:领券|下单|购买|去.{0,14}买|\([\da-z]{6,}\):\/\/|[¥$￥][^¥$￥\n]{0,23}[a-z\d]{8,}\s*[¥$￥])/i,
-        couponSearch: /(?:搜(?:索)?|嗖)(?:一下)?\s*(?:(?:口令|优惠码|兑换码)\s*[:：]?\s*\d{6,8}(?!\d)|(?:(?:口令|优惠码|兑换码)\s*)?[:：]?\s*(?:【\s*\d{6,8}\s*】|\[\s*\d{6,8}\s*\]|\d{6}(?!\d)))/,
+        maskedPrice: /(?:券后|到手|特价|仅需|仅售)(?:价|才|仅(?:需|售)?)?\s*\d+(?:\.\d+)?\s*亓/,
+        voucherPrice: /(?:下[单蛋]|领券|拍下|到手)\s*\d+(?:\.\d+)?\s*[¥￥]\s*[a-z\d]{3,8}\s+[a-z\d]{8,}\s*[¥￥]/i,
+        couponSearch: /(?:搜(?:索)?|嗖)(?:一下)?\s*(?:(?:口令|密令|优惠码|兑换码)\s*[:：]?\s*\d{6,8}(?!\d)|(?:(?:口令|密令|优惠码|兑换码)\s*)?[:：]?\s*(?:【\s*\d{6,8}\s*】|\[\s*\d{6,8}\s*\]|\d{6}(?!\d)))/,
         instantRetail: /外卖|闪购|外卖节|无门槛|神券|(?:领|大额).{0,6}红包/,
         checkout: /(?:直接|赶紧|抓紧|马上|现在)\s*(?:去\s*)?拍\s*\d+\s*(?:箱|盒|包|袋|瓶|罐|件|单|套|份)|(?:前往|速度去|赶紧去|快去).{0,16}(?:购买|下单|领券)|(?:领券后(?:再)?下单|拍下立减|有货.{0,5}(?:就|先|直接)拍|拍\s*(\d+)\s*(件|单|盒)[!、，,\s]+拍\s*\1\s*\2)/,
         checkoutLink: /(?:点(?:击|开)?|打开)[^。！？!?]{0,12}(?:链接|小黄车)[，,:：\s]*(?:直接|即可|就能|去)?\s*(?:购买|下单|领券)(?!记录|历史|体验|前)/,
@@ -50,10 +54,16 @@
         sellerPrice: /(?:原价|专柜(?:价)?|门店(?:价)?|别家|其他平台|某[\u4e00-\u9fff]{1,4})\s*(?:售价|卖|要)?\s*(?:¥|💰)?\s*\d+(?:\.\d+)?\s*(?:多|元|块)?\s*[,;、]\s*(?:咱们|我们|本店|店里)(?:这边)?\s*(?:仅(?:需|售)?|只要|到手(?:价)?|特价)\s*(?:¥|💰)?\s*\d+(?:\.\d+)?\s*(?:元|块)/,
         retailTerms: /(?:赠送?|送|包)\s*(?:运费险|[芸云]费险)/,
         stockOptions: /(?:尺码|男女码|款式|颜色).{0,10}(?:都有|齐全|可选|任选|现货)|(?:奥莱|奥特莱斯).{0,10}(?:降了|降价|清仓)/,
+        pitchComparison: /^别再(?:买|入手|选)/,
+        pitchRecommendation: /安利(?:一下|下|这款|这件|我在用)/,
+        productFunction: /吸湿排汗|防风防水|保暖不闷|贴合(?:腰背|背部|颈部)|(?:腰背|背部|颈部)支撑/,
+        productDesign: /防静电|不起球|高弹|角度(?:都)?(?:可以|可|能)调|档(?:温度|力度|高度)可选|材质透气/,
+        pitchValue: /性价比(?:直接)?拉满|闭眼入/,
+        productReview: /个人实测|自费(?:实测|购买|入手)|使用体验|对比测评|横评/,
         discussion: /防骗(?:提醒|经历|指南)?|骗局|骗子|辟谣|^(?:【)?(?:求问|请问)|求问[^。！？!?]{0,24}(?:值吗|靠谱吗|划算吗|是否属实)|(?:活动|优惠|返现|报价).{0,8}是真的吗|(?:旧活动截图|促销截图|广告截图|报道|新闻).{0,24}(?:写着|写的是|原文|话术)|(?:购物|操作)教程|(?:个人|二手)转卖|二手转售|仅供讨论|引用(?:一下|如下)|售后对比|退货体验/,
     };
 
-    function classify(text) {
+    function classify(text, videoForward = false) {
         const hit = {};
         for (const [name, pattern] of Object.entries(signals)) {
             hit[name] = pattern.test(text);
@@ -72,11 +82,14 @@
         const strongDirection = hit.copy || search || hit.checkoutLink;
         const directing = strongDirection || hit.checkout;
         const seller = hit.sellerPrice && hit.retailTerms && hit.stockOptions;
-        const offer = hit.price || hit.sellerPrice;
+        const offer = hit.price || hit.sellerPrice || hit.maskedPrice || (hit.copy && hit.voucherPrice);
         const rebateDeal = hit.rebate && (hit.live || hit.scarcity);
         const repeated = hit.repeatedPrice && hit.giveaway;
         const stockDeal = hit.giveaway && hit.scarcity && hit.checkout;
         const limitedDeal = hit.limitedOffer && hit.urgency;
+        const videoPitch = videoForward && !hit.productReview && hit.productFunction && hit.productDesign &&
+            (hit.pitchComparison || hit.pitchRecommendation);
+        const explicitVideoPitch = videoPitch && hit.pitchComparison && hit.pitchValue;
         add(offer, 2, '报价');
         add(directing, strongDirection ? 4 : 2, '购买或领取指令');
         add(hit.rebate, 2, '收货返现');
@@ -87,9 +100,10 @@
         add(hit.repeatedPrice, 3, '重复报价');
         add(seller, 4, '卖家报价与售卖条件');
         add(limitedDeal, 4, '优惠名额与催促');
+        add(videoPitch, explicitVideoPitch ? 6 : 4, '转发附言中的商品推介');
 
         const actionable = directing || rebateDeal || repeated || stockDeal || seller || limitedDeal;
-        const high = score >= 6 && offer && actionable && !hit.discussion;
+        const high = score >= 6 && ((offer && actionable) || explicitVideoPitch) && !hit.discussion;
         const commercial = offer && (directing || hit.rebate || (hit.scarcity && hit.promotion));
         return { level: high ? 2 : score >= 4 ? 1 : 0, score, reasons, commercial };
     }
@@ -238,15 +252,17 @@
         const blocks = [];
         for (const element of card.querySelectorAll(contentSelector)) {
             if (element.closest(cardSelector) !== card || element.parentElement.closest(contentSelector)) continue;
-            blocks.push(element.textContent.normalize('NFKC').replace(/[\u200b-\u200f\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim());
+            const text = element.textContent.normalize('NFKC').replace(/[\u200b-\u200f\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+            const videoForward = element.matches(forwardTextSelector) && Boolean(card.querySelector(videoReferenceSelector));
+            if (text) blocks.push({ text, videoForward });
         }
         return blocks;
     }
 
     function strongest(blocks) {
         let best = { level: 0, score: 0, reasons: [], text: "" };
-        for (const text of blocks) {
-            const result = classify(text);
+        for (const { text, videoForward } of blocks) {
+            const result = classify(text, videoForward);
             if (result.level > best.level || (result.level === best.level && result.score > best.score) || (result.score === best.score && result.level === best.level && text.length > best.text.length)) {
                 best = { ...result, text };
             }
@@ -293,12 +309,13 @@
             return state?.result.level === 2;
         }
         const blocks = contentBlocks(card);
-        if (!blocks.some(Boolean)) {
+        if (!blocks.length) {
             if (state) clear(card, state);
             return state?.result.level === 2;
         }
         const sameText = state && blocks.length === state.blocks.length &&
-            blocks.every((text, index) => text === state.blocks[index]);
+            blocks.every((block, index) => block.text === state.blocks[index].text &&
+                block.videoForward === state.blocks[index].videoForward);
         const baseline = sameText ? state.baseline : strongest(blocks);
         const identity = card.querySelector('.dyn-card-opus__title[data-url], .bili-dyn-card-article[href]');
         const link = identity?.getAttribute('data-url') ?? identity?.getAttribute('href');
