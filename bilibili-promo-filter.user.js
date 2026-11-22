@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站动态软广折叠
 // @namespace    local.bilibili.dynamic.promo
-// @version      2.2.0
+// @version      2.2.1
 // @updateURL    https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @downloadURL  https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @description  隐藏动态广告位和带货商品卡，并在本地按组合信号折叠疑似软广
@@ -21,6 +21,7 @@
     const cardSelector = '.bili-dyn-list__item';
     const listSelector = '.bili-dyn-list__items';
     const goodsSelector = '.bili-dyn-card-goods';
+    const footerSelector = '.bili-dyn-item__footer';
     const contentSelector = '.dyn-card-opus, .bili-dyn-card-article, .bili-dyn-content__orig__desc, .opus-module-content';
     const noticeSelector = '[data-bili-promo-notice]';
     const groupSelector = '[data-bili-promo-group]';
@@ -217,13 +218,14 @@
         groupSelector + ' button { display:block; width:100%; text-align:start; padding:3px 10px;' +
         'font-size:12px; line-height:1.5; border:0; border-radius:6px; cursor:pointer;' +
         'color:var(--text2,#61666d); background:var(--bg2,#f1f2f3); }' +
-        '.bili-dyn-item__header:has(> ' + noticeSelector + '), ' + cardSelector + ':has(> ' + noticeSelector + ') { position:relative; }' +
-        noticeSelector + ' { position:absolute; inset-inline-end:32px; inset-block-end:0; z-index:1;' +
+        footerSelector + ':has(> ' + noticeSelector + ') { height:auto; min-height:50px; flex-wrap:wrap; column-gap:8px; }' +
+        noticeSelector + ' { align-self:center; min-inline-size:0; max-inline-size:100%;' +
         'font-size:12px; line-height:1.5; color:var(--text2,#61666d); }' +
-        cardSelector + ' > ' + noticeSelector + ' { inset-block-start:4px; inset-block-end:auto; }' +
+        cardSelector + ' > ' + noticeSelector + ' { display:flex; justify-content:flex-end; padding:4px 12px; }' +
         noticeSelector + ' summary { cursor:pointer; color:inherit; border-radius:4px; padding:0 4px; background:var(--bg1,#fff); }' +
-        noticeSelector + ' details > div { position:absolute; inset-inline-end:0; min-width:190px; width:max-content; max-width:240px;' +
-        'padding:8px; border:1px solid var(--line_regular,#c9ccd0); border-radius:6px; background:var(--bg1,#fff); }' +
+        noticeSelector + ' details > div { max-inline-size:230px; margin-block:4px; padding:4px;' +
+        'border:1px solid var(--line_regular,#c9ccd0); border-radius:6px; background:var(--bg1,#fff); }' +
+        noticeSelector + ' span[hidden] + br { display:none; }' +
         noticeSelector + ' button:not([hidden]) { margin:3px 3px 0 0;' +
         'cursor:pointer; color:var(--text-link,#087f9f); background:var(--bg1,#fff);' +
         'border:1px solid var(--line_regular,#c9ccd0); border-radius:6px; padding:3px 9px;' +
@@ -301,7 +303,7 @@
         const key = fingerprint(link ? 'post:' + link.replace(/^https?:/, '').split(/[?#]/)[0] : 'text:' + baseline.text);
         if (state && state.key !== key && link) state.expanded = false;
         const wasHigh = state?.result.level === 2;
-        const mount = card.querySelector('.bili-dyn-item__header') ?? card;
+        const mount = card.querySelector(footerSelector) ?? card;
         if (sameText && state.key === key && !feedbackChanged) {
             if (state.notice.parentElement !== mount) mount.append(state.notice);
             return false;
