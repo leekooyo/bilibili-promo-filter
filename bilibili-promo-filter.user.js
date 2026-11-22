@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站动态软广折叠
 // @namespace    local.bilibili.dynamic.promo
-// @version      2.2.4
+// @version      2.3.0
 // @updateURL    https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @downloadURL  https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js
 // @description  隐藏动态广告位和带货商品卡，并在本地按组合信号折叠疑似软广
@@ -191,8 +191,7 @@
         return { first: positive[0] ?? 0, second: positive[1] ?? 0, negative };
     }
 
-    function personalize(baseline, text, key) {
-        const direct = samples.find(sample => sample.key === key);
+    function personalize(baseline, text, key, direct = samples.find(sample => sample.key === key)) {
         if (direct) {
             return { level: direct.ad ? 2 : 0, score: baseline.score,
                 reasons: [direct.ad ? '你标记为广告' : '你标记为普通动态'] };
@@ -214,7 +213,7 @@
     }
 
     function saveFeedback(state, ad) {
-        const next = readSamples(GM_getValue(storageKey, [])).filter(sample => sample.key !== state.key);
+        const next = readSamples(GM_getValue(storageKey, [])).filter(sample => !state.keys.includes(sample.key));
         if (ad !== null) {
             const grams = features(state.text);
             const signature = fingerprint(grams.slice().sort((a, b) => a - b).join(','));
@@ -224,6 +223,60 @@
         GM_setValue(storageKey, bounded);
         rebuild(bounded);
         refreshFeed();
+    }
+
+    function postKeys(card) {
+        for (const identity of card.querySelectorAll('.dyn-card-opus__title[data-url], .bili-dyn-card-article[href]')) {
+            if (identity.closest(cardSelector) !== card || identity.closest('.bili-dyn-content__orig.reference')) continue;
+            const link = identity.getAttribute('data-url') ?? identity.getAttribute('href');
+            if (!link || !URL.canParse(link, location.href)) continue;
+            const url = new URL(link, location.href);
+            const legacy = fingerprint('post:' + link.replace(/^https?:/, '').split(/[?#]/)[0]);
+            const opus = url.hostname === 'www.bilibili.com' && url.pathname.match(/^\/opus\/(\d+)\/?$/);
+            const dynamic = url.hostname === 't.bilibili.com' && url.pathname.match(/^\/(\d+)\/?$/);
+            const id = opus?.[1] || dynamic?.[1];
+            if (id) {
+                return [
+                    fingerprint('post://www.bilibili.com/opus/' + id),
+                    legacy,
+                    fingerprint('post://t.bilibili.com/' + id),
+                ];
+            }
+            if (url.hostname === 'www.bilibili.com' && /^\/read\/cv\d+\/?$/i.test(url.pathname)) {
+                return [fingerprint('post://www.bilibili.com' + url.pathname.replace(/\/$/, '')), legacy];
+            }
+        }
+        return [];
+    }
+
+    function visiblePrefix(text) {
+        return text.replace(/(?:\s*(?:全文|展开|收起|查看大图|向左旋转|向右旋转))+$/, '')
+            .replace(/\s*(?:…+|\.{3,})$/, '').trim();
+    }
+
+    function sameContent(previous, current) {
+        if (previous === current) return true;
+        const before = visiblePrefix(previous);
+        const after = visiblePrefix(current);
+        return Boolean(before && after) && (before.startsWith(after) || after.startsWith(before));
+    }
+
+    function feedbackIdentity(card, baseline, state) {
+        const stable = postKeys(card);
+        const author = card.querySelector('.bili-dyn-title');
+        const context = author?.querySelector('a[href]')?.getAttribute('href') ?? author?.textContent.trim() ?? '';
+        const reference = card.querySelector('.bili-dyn-content__orig.reference a[href*="/video/"]')?.getAttribute('href') ?? '';
+        const sameCard = state && state.baseline.element === baseline.element &&
+            state.author === context && state.reference === reference && sameContent(state.baseline.text, baseline.text);
+        if (stable.length) {
+            const keepAliases = state && (state.key === stable[0] || (sameCard && !state.stable));
+            const aliases = keepAliases ? state.keys : [];
+            return { keys: [...new Set([...stable, ...aliases])], stable: true, author: context, reference };
+        }
+        if (sameCard) return { keys: state.keys, stable: state.stable, author: context, reference };
+        // Identical copy on unrelated cards should not share a new exact correction.
+        const viewKey = fingerprint('view:' + crypto.getRandomValues(new Uint32Array(4)).join('-'));
+        return { keys: [viewKey, fingerprint('text:' + baseline.text)], stable: false, author: context, reference };
     }
 
     rebuild(GM_getValue(storageKey, []));
@@ -256,17 +309,17 @@
             if (element.closest(cardSelector) !== card || element.parentElement.closest(contentSelector)) continue;
             const text = element.textContent.normalize('NFKC').replace(/[\u200b-\u200f\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
             const videoForward = element.matches(forwardTextSelector) && Boolean(card.querySelector(videoReferenceSelector));
-            if (text) blocks.push({ text, videoForward });
+            if (text) blocks.push({ text, videoForward, element });
         }
         return blocks;
     }
 
     function strongest(blocks) {
         let best = { level: 0, score: 0, reasons: [], text: "" };
-        for (const { text, videoForward } of blocks) {
+        for (const { text, videoForward, element } of blocks) {
             const result = classify(text, videoForward);
             if (result.level > best.level || (result.level === best.level && result.score > best.score) || (result.score === best.score && result.level === best.level && text.length > best.text.length)) {
-                best = { ...result, text };
+                best = { ...result, text, element };
             }
         }
         return best;
@@ -321,12 +374,11 @@
         }
         const sameText = state && blocks.length === state.blocks.length &&
             blocks.every((block, index) => block.text === state.blocks[index].text &&
-                block.videoForward === state.blocks[index].videoForward);
+                block.videoForward === state.blocks[index].videoForward && block.element === state.blocks[index].element);
         const baseline = sameText ? state.baseline : strongest(blocks);
-        const identity = card.querySelector('.dyn-card-opus__title[data-url], .bili-dyn-card-article[href]');
-        const link = identity?.getAttribute('data-url') ?? identity?.getAttribute('href');
-        const key = fingerprint(link ? 'post:' + link.replace(/^https?:/, '').split(/[?#]/)[0] : 'text:' + baseline.text);
-        if (state && state.key !== key && link) state.expanded = false;
+        const identity = feedbackIdentity(card, baseline, state);
+        const key = identity.keys[0];
+        if (state && state.key !== key && !identity.keys.includes(state.key)) state.expanded = false;
         const wasHigh = state?.result.level === 2;
         const mount = card.querySelector(footerSelector) ?? card;
         if (sameText && state.key === key && !feedbackChanged) {
@@ -359,9 +411,11 @@
         state.blocks = blocks;
         state.baseline = baseline;
         state.key = key;
+        Object.assign(state, identity);
         state.text = baseline.text;
-        state.feedback = samples.find(sample => sample.key === key)?.ad;
-        state.result = personalize(baseline, state.text, key);
+        const direct = state.keys.map(key => samples.find(sample => sample.key === key)).find(Boolean) ?? null;
+        state.feedback = direct?.ad;
+        state.result = personalize(baseline, state.text, key, direct);
         if (state.result.level !== 2) state.expanded = false;
         draw(card, state);
         return visibilityChanged || wasHigh !== (state.result.level === 2);

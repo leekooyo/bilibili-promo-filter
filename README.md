@@ -4,8 +4,10 @@
 
 ## 使用
 
-打开 [安装或更新脚本](https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js)，在 Tampermonkey 的安装页面选择安装或更新，再刷新 B 站动态页。已有的同名脚本等原位更新后，Tampermonkey 会按自身设置检查后续版本。
+打开 [安装或更新脚本](https://raw.githubusercontent.com/leekooyo/bilibili-promo-filter/main/bilibili-promo-filter.user.js)，在 Tampermonkey 的安装页面选择安装或更新，再刷新 B 站动态页。已有的同名脚本原位更新后，Tampermonkey 会按自身设置检查后续版本。
+
+有可识别动态链接时，手动标记可以跨刷新识别。同一张无链接卡片在当前页面展开或收起正文后，仍可撤销手动标记。标记产生的文本特征可以继续参与本地相似度判断。
 
 ## 维护
 
-直接修改 `bilibili-promo-filter.user.js`。发布前更新脚本头部的 `@version`，并在动态页检查折叠、展开和推广标记。安装文件就是这个脚本，无需构建。
+直接修改 `bilibili-promo-filter.user.js`。发布前运行 `node --check bilibili-promo-filter.user.js` 和 `node --test check.cjs`，再在动态页检查折叠、展开和推广标记。更新脚本头部的 `@version` 后即可发布，安装文件就是这个脚本。
